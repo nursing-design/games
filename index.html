@@ -1,0 +1,1767 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>サイバーチワワ・アクション【ヘルメット＆マント搭載版】</title>
+<style>
+    body {
+        margin: 0;
+        padding: 0;
+        background-color: #08080c;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        color: #eee;
+        font-family: 'Courier New', 'MS Gothic', monospace;
+        overflow: hidden;
+        user-select: none;
+    }
+    #crt-frame {
+        position: relative;
+        border: 14px solid #1a1a1f;
+        border-radius: 28px;
+        box-shadow: 0 0 50px rgba(0, 255, 200, 0.15), inset 0 0 25px #000;
+        background: #000;
+        overflow: hidden;
+    }
+    canvas {
+        display: block;
+        image-rendering: pixelated;
+    }
+    .scanlines {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: linear-gradient(
+            rgba(18, 16, 16, 0) 50%, 
+            rgba(0, 0, 0, 0.38) 50%
+        ), linear-gradient(
+            90deg,
+            rgba(255, 0, 0, 0.03),
+            rgba(0, 255, 0, 0.01),
+            rgba(0, 0, 255, 0.03)
+        );
+        background-size: 100% 4px, 6px 100%;
+        pointer-events: none;
+        z-index: 10;
+    }
+    .vignette {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        box-shadow: inset 0 0 60px rgba(0,0,0,0.75);
+        pointer-events: none;
+        z-index: 11;
+    }
+    .controls {
+        margin-top: 14px;
+        font-size: 14px;
+        color: #9aa;
+        background: #14161d;
+        padding: 8px 20px;
+        border-radius: 20px;
+        border: 1px solid #2a2e3d;
+        letter-spacing: 1px;
+    }
+    .controls span {
+        color: #4ef0d0;
+        font-weight: bold;
+    }
+</style>
+</head>
+<body>
+
+<div id="crt-frame">
+    <canvas id="gameCanvas" width="854" height="480"></canvas>
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+</div>
+<div class="controls">
+    操作: <span>[←][→]</span> 移動 ｜ <span>[↑]/[Space]</span> ジャンプ ｜ <span>[Z]/[Enter]</span> 吠える ｜ <span>[M]</span> 音量ON/OFF ｜ <span>[R]</span> 最初から
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// ==================================================
+// 1. 全5ステージの背景テーマ・ボス設定
+// ==================================================
+const STAGE_THEMES = [
+    { // STAGE 1: 夕暮れの侵入区画
+        name: "STAGE 1: SUNSET BASE",
+        bossName: "CERBERUS MK-I",
+        sky: ['#783c26', '#c87038', '#e89c52'],
+        city: '#5c3224', wall: '#1c222d', winWall: '#252024', pillar: '#332829',
+        light: '#e87830', screen: '#68f0d8', monBg: '#266b6e',
+        bossHp: 18, bossColor: '#2c3545', bossSpeed: 2.2, fireRate: 85
+    },
+    { // STAGE 2: 深夜のネオン電脳街
+        name: "STAGE 2: NEON CYBER CITY",
+        bossName: "FENRIR UNIT-02",
+        sky: ['#09071c', '#1c124a', '#4a1b6d'],
+        city: '#0b0618', wall: '#161426', winWall: '#1b1326', pillar: '#291d38',
+        light: '#00f2fe', screen: '#ff49db', monBg: '#3a1c54',
+        bossHp: 24, bossColor: '#251a3a', bossSpeed: 2.7, fireRate: 72
+    },
+    { // STAGE 3: バイオ化学プラント（ここからヘルメット出現！）
+        name: "STAGE 3: BIO-TECH LAB",
+        bossName: "DOBERMAN BIO-X",
+        sky: ['#092014', '#164b2c', '#458732'],
+        city: '#07170e', wall: '#17241e', winWall: '#1a2418', pillar: '#273623',
+        light: '#a8ff3e', screen: '#76ff03', monBg: '#1c4224',
+        bossHp: 30, bossColor: '#1e3322', bossSpeed: 3.1, fireRate: 62
+    },
+    { // STAGE 4: 灼熱の溶鉱炉コア
+        name: "STAGE 4: MAGMA FURNACE",
+        bossName: "HELLHOUND CORE",
+        sky: ['#2b0707', '#73140e', '#d64515'],
+        city: '#1f0404', wall: '#291515', winWall: '#2e1411', pillar: '#421c18',
+        light: '#ff2a00', screen: '#ffaa00', monBg: '#591c15',
+        bossHp: 36, bossColor: '#421616', bossSpeed: 3.5, fireRate: 52
+    },
+    { // STAGE 5: 中枢マザーコンピュータ（最終面）
+        name: "FINAL STAGE: MOTHER CORE",
+        bossName: "EMPEROR MECHA-REX",
+        sky: ['#050b14', '#0f2847', '#1e5785'],
+        city: '#02060d', wall: '#202630', winWall: '#18202c', pillar: '#2e3b4e',
+        light: '#ff0055', screen: '#00ffff', monBg: '#143852',
+        bossHp: 45, bossColor: '#2e2b16', bossSpeed: 4.0, fireRate: 42
+    }
+];
+
+// ==================================================
+// 2. サイバーシンセサイザー音響システム (Web Audio API)
+// ==================================================
+const sound = {
+    ctx: null,
+    isPlaying: false,
+    muted: false,
+    mode: 'stage',
+    step: 0,
+    timer: null,
+
+    init() {
+        if (!this.ctx) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            this.ctx = new AudioCtx();
+        }
+        if (this.ctx.state === 'suspended') this.ctx.resume();
+        if (!this.isPlaying) {
+            this.isPlaying = true;
+            this.startSequencer();
+        }
+    },
+
+    toggleMute() { this.muted = !this.muted; },
+
+    playTone(freq, duration, type = 'sawtooth', vol = 0.1, cutoff = 1200) {
+        if (!this.ctx || this.muted || !freq) return;
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const filter = this.ctx.createBiquadFilter();
+        const gain = this.ctx.createGain();
+
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, t);
+
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(cutoff, t);
+        filter.frequency.exponentialRampToValueAtTime(180, t + duration);
+
+        gain.gain.setValueAtTime(vol, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
+
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.ctx.destination);
+
+        osc.start(t);
+        osc.stop(t + duration);
+    },
+
+    playDrum(type) {
+        if (!this.ctx || this.muted) return;
+        const t = this.ctx.currentTime;
+        if (type === 'kick') {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.frequency.setValueAtTime(140, t);
+            osc.frequency.exponentialRampToValueAtTime(30, t + 0.12);
+            gain.gain.setValueAtTime(0.28, t);
+            gain.gain.exponentialRampToValueAtTime(0.01, t + 0.12);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(t); osc.stop(t + 0.12);
+        } else if (type === 'snare' || type === 'hat') {
+            const bufSize = this.ctx.sampleRate * (type === 'snare' ? 0.12 : 0.04);
+            const buffer = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+            const noise = this.ctx.createBufferSource();
+            noise.buffer = buffer;
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = type === 'snare' ? 'bandpass' : 'highpass';
+            filter.frequency.setValueAtTime(type === 'snare' ? 1200 : 6000, t);
+            const gain = this.ctx.createGain();
+            gain.gain.setValueAtTime(type === 'snare' ? 0.18 : 0.05, t);
+            gain.gain.exponentialRampToValueAtTime(0.01, t + (type === 'snare' ? 0.12 : 0.04));
+            noise.connect(filter); filter.connect(gain); gain.connect(this.ctx.destination);
+            noise.start(t);
+        }
+    },
+
+    playSfx(name) {
+        if (!this.ctx || this.muted) return;
+        const t = this.ctx.currentTime;
+        if (name === 'bark') {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(420, t);
+            osc.frequency.exponentialRampToValueAtTime(780, t + 0.06);
+            osc.frequency.exponentialRampToValueAtTime(320, t + 0.14);
+            gain.gain.setValueAtTime(0.2, t);
+            gain.gain.exponentialRampToValueAtTime(0.01, t + 0.14);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(t); osc.stop(t + 0.14);
+        } else if (name === 'jump') {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sine';
+            const endFreq = player.hasCape ? 820 : 580; // マント装着時は高いジャンプ音
+            osc.frequency.setValueAtTime(240, t);
+            osc.frequency.exponentialRampToValueAtTime(endFreq, t + 0.18);
+            gain.gain.setValueAtTime(0.15, t);
+            gain.gain.exponentialRampToValueAtTime(0.01, t + 0.18);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(t); osc.stop(t + 0.18);
+        } else if (name === 'heal') {
+            [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+                setTimeout(() => this.playTone(freq, 0.15, 'sine', 0.18, 3000), idx * 55);
+            });
+        } else if (name === 'powerup') {
+            // ヘルメット・マント装着時の勇ましいパワーアップ音
+            [440, 554.37, 659.25, 880, 1108.73].forEach((freq, idx) => {
+                setTimeout(() => this.playTone(freq, 0.14, 'square', 0.14, 3500), idx * 50);
+            });
+        } else if (name === 'block') {
+            // ヘルメットが攻撃を防いだ時の「カキン！」という金属反射音
+            this.playTone(1350, 0.08, 'triangle', 0.25, 4500);
+            setTimeout(() => this.playTone(1950, 0.15, 'sine', 0.25, 5000), 45);
+        } else if (name === 'hit' || name === 'bossExplosion') {
+            const dur = name === 'bossExplosion' ? 0.65 : 0.18;
+            const bufSize = this.ctx.sampleRate * dur;
+            const buffer = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+            const noise = this.ctx.createBufferSource();
+            noise.buffer = buffer;
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(name === 'bossExplosion' ? 600 : 1200, t);
+            const gain = this.ctx.createGain();
+            gain.gain.setValueAtTime(0.25, t);
+            gain.gain.exponentialRampToValueAtTime(0.01, t + dur);
+            noise.connect(filter); filter.connect(gain); gain.connect(this.ctx.destination);
+            noise.start(t);
+        } else if (name === 'damage') {
+            this.playTone(110, 0.3, 'sawtooth', 0.25, 600);
+        } else if (name === 'warning') {
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(520, t);
+            osc.frequency.linearRampToValueAtTime(740, t + 0.25);
+            gain.gain.setValueAtTime(0.15, t);
+            gain.gain.exponentialRampToValueAtTime(0.01, t + 0.28);
+            osc.connect(gain); gain.connect(this.ctx.destination);
+            osc.start(t); osc.stop(t + 0.28);
+        }
+    },
+
+    startSequencer() {
+        const stageBass = [
+            110, 110, 220, 110,  110, 110, 220, 110,
+            87.3,87.3,174.6,87.3, 87.3,87.3,174.6,87.3,
+            98.0,98.0,196.0,98.0, 98.0,98.0,196.0,98.0,
+            82.4,82.4,164.8,82.4, 98.0,98.0,123.5,110
+        ];
+        const stageLead = [
+            440, 0, 523.3, 440, 659.3, 0, 587.3, 523.3,
+            392, 0, 440,   0,   523.3, 0, 392,   0,
+            349.2,0,440,   349.2,523.3,0, 493.9, 440,
+            329.6,0,392,   329.6,493.9,0, 659.3, 0
+        ];
+        const bossBass = [
+            73.4,73.4,146.8,73.4, 77.8,77.8,155.6,77.8,
+            73.4,73.4,146.8,73.4, 87.3,87.3,82.4, 77.8
+        ];
+        const bossLead = [
+            587.3,0,622.3,587.3, 698.5,0,622.3,587.3,
+            554.4,0,587.3,0,     784.0,0,740.0,698.5
+        ];
+        const endBass = [
+            130.8, 0, 196.0, 0, 146.8, 0, 220.0, 0,
+            164.8, 0, 246.9, 0, 174.6, 0, 196.0, 0
+        ];
+        const endLead = [
+            523.3, 659.3, 784.0, 659.3, 587.3, 698.5, 880.0, 698.5,
+            659.3, 784.0, 987.8, 784.0, 698.5, 880.0, 784.0, 0
+        ];
+
+        this.timer = setInterval(() => {
+            if (!['PLAYING', 'WARNING', 'STAGE_CLEAR', 'ENDING'].includes(gameState)) return;
+            const pitchShift = 1 + (currentStage - 1) * 0.035;
+
+            if (this.mode === 'stage') {
+                const s = this.step % 32;
+                this.playTone(stageBass[s] * pitchShift, 0.12, 'sawtooth', 0.09, 950);
+                if (stageLead[s]) this.playTone(stageLead[s] * pitchShift, 0.22, 'square', 0.055, 2400);
+                if (s % 4 === 0) this.playDrum('kick');
+                if (s % 8 === 4) this.playDrum('snare');
+                if (s % 2 === 1) this.playDrum('hat');
+            } else if (this.mode === 'boss') {
+                const s = this.step % 16;
+                this.playTone(bossBass[s] * pitchShift, 0.11, 'sawtooth', 0.12, 1300);
+                if (bossLead[s]) this.playTone(bossLead[s] * pitchShift, 0.16, 'sawtooth', 0.07, 2800);
+                if (s % 2 === 0) this.playDrum('kick');
+                if (s % 4 === 2) this.playDrum('snare');
+                this.playDrum('hat');
+            } else if (this.mode === 'ending') {
+                const s = this.step % 16;
+                if (endBass[s]) this.playTone(endBass[s], 0.24, 'triangle', 0.1, 1200);
+                if (endLead[s]) this.playTone(endLead[s], 0.22, 'sine', 0.09, 2500);
+                if (s % 4 === 0) this.playDrum('kick');
+                if (s % 8 === 4) this.playDrum('hat');
+            }
+            this.step++;
+        }, 125);
+    }
+};
+
+// ==================================================
+// 3. ゲーム変数・ステージ初期化管理
+// ==================================================
+const FLOOR_Y = 395;
+const BOSS_SPAWN_SCROLL = 1500;
+
+let gameState = 'START';
+let currentStage = 1;
+const MAX_STAGE = 5;
+
+let scrollX = 0;
+let gameTick = 0;
+let stateTimer = 0;
+let score1 = 12924000;
+let score2 = 80198;
+let lives = 5;
+
+const player = {
+    x: 200,
+    y: FLOOR_Y,
+    vy: 0,
+    speed: 4.8,
+    baseJumpPower: -13.6,
+    capeJumpPower: -18.2, // マント装着時の大ジャンプ力！
+    gravity: 0.65,
+    grounded: true,
+    dir: 1,
+    animTimer: 0,
+    isMoving: false,
+    barkTimer: 0,
+    invincible: 0,
+    helmetHp: 0,    // ヘルメットの残り防御回数（最大3）
+    hasCape: false  // マント装着フラグ
+};
+
+let barks = [];
+let enemies = [];
+let items = [];
+let enemyBullets = [];
+let particles = [];
+let boss = null;
+
+// アイテム出現管理フラグ
+let itemSpawnedFlags = {
+    heal1: false,
+    heal2: false,
+    helmet: false,
+    cape: false,
+    capeScrollPos: 0
+};
+
+// キー入力管理
+const keys = {};
+window.addEventListener('keydown', e => {
+    if(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) {
+        e.preventDefault();
+    }
+    if (gameState === 'START') {
+        sound.init();
+        resetGame();
+        return;
+    }
+    if (e.code === 'KeyM') sound.toggleMute();
+    if (e.code === 'KeyR' && (gameState === 'GAMEOVER' || gameState === 'ENDING')) {
+        resetGame();
+        return;
+    }
+
+    if (gameState === 'PLAYING' || gameState === 'WARNING') {
+        if (!keys[e.code]) {
+            if (e.code === 'KeyZ' || e.code === 'Enter') shootBark();
+            if ((e.code === 'Space' || e.code === 'ArrowUp') && player.grounded) {
+                // マントを着ている時は高くジャンプできる！
+                player.vy = player.hasCape ? player.capeJumpPower : player.baseJumpPower;
+                player.grounded = false;
+                sound.playSfx('jump');
+            }
+        }
+    }
+    keys[e.code] = true;
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+canvas.addEventListener('mousedown', () => {
+    if (gameState === 'START') {
+        sound.init();
+        resetGame();
+    } else if (gameState === 'GAMEOVER' || gameState === 'ENDING') {
+        resetGame();
+    }
+});
+
+function initStage(stageNum) {
+    currentStage = stageNum;
+    scrollX = 0;
+    player.x = 180;
+    player.y = FLOOR_Y;
+    player.vy = 0;
+    player.dir = 1;
+
+    // ★マントとヘルメットは次の面には持ち越せない（ステージ開始時にリセット）
+    player.helmetHp = 0;
+    player.hasCape = false;
+
+    barks = [];
+    enemies = [];
+    items = [];
+    enemyBullets = [];
+    particles = [];
+    boss = null;
+
+    // 各ステージ1回ランダムな位置（200〜1300の間）でマントが出現する設定
+    itemSpawnedFlags = {
+        heal1: false,
+        heal2: false,
+        helmet: false,
+        cape: false,
+        capeScrollPos: 220 + Math.floor(Math.random() * 1050)
+    };
+
+    sound.mode = 'stage';
+    gameState = 'PLAYING';
+}
+
+function resetGame() {
+    score1 = 12924000;
+    score2 = 80198;
+    lives = 5;
+    player.invincible = 0;
+    initStage(1);
+}
+
+function shootBark() {
+    player.barkTimer = 14;
+    sound.playSfx('bark');
+    barks.push({
+        x: player.dir === 1 ? player.x + 48 : player.x - 48,
+        y: player.y - 36,
+        vx: player.dir * 10.5,
+        dir: player.dir,
+        scale: 0.45,
+        life: 65
+    });
+}
+
+function spawnBoss() {
+    const theme = STAGE_THEMES[currentStage - 1];
+    boss = {
+        x: canvas.width + 140,
+        targetX: 675,
+        y: 235,
+        vy: theme.bossSpeed,
+        hp: theme.bossHp,
+        maxHp: theme.bossHp,
+        state: 'entering',
+        attackTimer: 0,
+        flashTimer: 0
+    };
+}
+
+function damagePlayer() {
+    if (player.invincible > 0 || gameState !== 'PLAYING') return;
+
+    // ★ヘルメットを被っている場合はダメージを無効化し、耐久値を-1する！
+    if (player.helmetHp > 0) {
+        player.helmetHp--;
+        sound.playSfx('block');
+        player.invincible = 65;
+        player.vy = -6.0;
+        // バリア反射エフェクト（水色＆黄色のキラキラ）
+        for (let p = 0; p < 16; p++) {
+            particles.push({
+                x: player.x, y: player.y - 45,
+                vx: (Math.random() - 0.5) * 10,
+                vy: (Math.random() - 0.5) * 10,
+                color: p % 2 === 0 ? '#00f2fe' : '#ffeb55',
+                life: 25
+            });
+        }
+        return;
+    }
+
+    lives--;
+    sound.playSfx('damage');
+    player.invincible = 75;
+    player.vy = -7.5;
+    for (let p = 0; p < 12; p++) {
+        particles.push({
+            x: player.x, y: player.y - 25,
+            vx: (Math.random() - 0.5) * 8,
+            vy: (Math.random() - 0.5) * 8,
+            color: '#ff4d4d',
+            life: 25
+        });
+    }
+    if (lives <= 0) {
+        lives = 0;
+        gameState = 'GAMEOVER';
+    }
+}
+
+// ==================================================
+// 4. 描画関数（UI・背景・チワワ＋装備・アイテム）
+// ==================================================
+function drawHUD() {
+    ctx.fillStyle = '#07080c';
+    ctx.fillRect(0, 0, canvas.width, 58);
+    ctx.fillStyle = '#25293a';
+    ctx.fillRect(0, 56, canvas.width, 2);
+
+    // 左上のチワワ残機アイコン
+    ctx.save();
+    ctx.translate(42, 34);
+    ctx.fillStyle = '#c88246';
+    ctx.beginPath(); ctx.moveTo(-14, -6); ctx.lineTo(-18, -24); ctx.lineTo(-4, -14); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(4, -14); ctx.lineTo(14, -25); ctx.lineTo(14, -6); ctx.fill();
+    ctx.fillStyle = '#e09898';
+    ctx.beginPath(); ctx.moveTo(-12, -8); ctx.lineTo(-15, -20); ctx.lineTo(-6, -13); ctx.fill();
+    ctx.fillStyle = '#df9b5c';
+    ctx.beginPath(); ctx.arc(0, -4, 14, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#f5eee6';
+    ctx.beginPath(); ctx.arc(3, 1, 9, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#151010';
+    ctx.beginPath(); ctx.arc(-2, -5, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(8, -5, 2.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-3, -7, 1.5, 1.5);
+    ctx.fillStyle = '#222';
+    ctx.beginPath(); ctx.arc(11, -1, 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // 残機テキスト
+    ctx.fillStyle = lives <= 1 ? '#ff5555' : '#dde2ea';
+    ctx.font = 'bold 20px "Courier New", monospace';
+    ctx.fillText('×' + lives, 64, 43);
+
+    // スコア1「しんにゅう」
+    ctx.fillStyle = '#dde2ea';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 18px "MS Gothic", sans-serif';
+    ctx.fillText('しんにゅう', 180, 24);
+    ctx.font = 'bold 20px "Courier New", monospace';
+    ctx.fillText(score1.toString().padStart(9, '0'), 180, 47);
+
+    // スコア2「込んにゅう」
+    ctx.font = 'bold 18px "MS Gothic", sans-serif';
+    ctx.fillText('込んにゅう', 330, 24);
+    ctx.font = 'bold 20px "Courier New", monospace';
+    ctx.fillText(score2.toString().padStart(8, '0'), 330, 47);
+
+    // ★現在装備中のヘルメット＆マント状態表示
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 13px "MS Gothic", monospace';
+    ctx.fillStyle = player.helmetHp > 0 ? '#ff9ff3' : '#556';
+    let shieldMarks = '★'.repeat(player.helmetHp) + '☆'.repeat(3 - player.helmetHp);
+    ctx.fillText(`メット:${shieldMarks}`, 420, 24);
+
+    ctx.fillStyle = player.hasCape ? '#ff5e57' : '#556';
+    ctx.fillText(`マント:${player.hasCape ? 'ON(大ジャンプ)' : 'OFF'}`, 420, 46);
+
+    // ステージ表記＆進行度／ボスHP
+    const theme = STAGE_THEMES[currentStage - 1];
+    if (!boss) {
+        let progress = Math.min(1, scrollX / BOSS_SPAWN_SCROLL);
+        ctx.fillStyle = theme.screen;
+        ctx.font = 'bold 13px "Courier New", monospace';
+        ctx.fillText(`STAGE ${currentStage}/5`, 565, 23);
+        ctx.fillStyle = '#1b222c';
+        ctx.fillRect(565, 31, 200, 13);
+        ctx.fillStyle = theme.screen;
+        ctx.fillRect(567, 33, 196 * progress, 9);
+    } else {
+        ctx.fillStyle = '#ff5e57';
+        ctx.font = 'bold 13px "Courier New", monospace';
+        ctx.fillText(`BOSS: ${theme.bossName}`, 565, 23);
+        ctx.fillStyle = '#2c1418';
+        ctx.fillRect(565, 31, 200, 14);
+        let hpRatio = Math.max(0, boss.hp / boss.maxHp);
+        ctx.fillStyle = '#ff3838';
+        ctx.fillRect(567, 33, 196 * hpRatio, 10);
+    }
+
+    ctx.fillStyle = sound.muted ? '#666' : '#4ef0d0';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText(sound.muted ? '🔇MUTE' : '🔊BGM', 780, 36);
+}
+
+function drawBackground() {
+    const theme = STAGE_THEMES[currentStage - 1];
+
+    // 1. ステージごとの空グラデーションと遠景シルエット
+    let grad = ctx.createLinearGradient(0, 58, 0, 270);
+    grad.addColorStop(0, theme.sky[0]);
+    grad.addColorStop(0.5, theme.sky[1]);
+    grad.addColorStop(1, theme.sky[2]);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 58, canvas.width, 230);
+
+    ctx.fillStyle = theme.city;
+    const buildings = [45, 85, 35, 110, 65, 95, 50, 120, 70, 80];
+    let bOffset = -(scrollX * 0.15) % 600;
+    for (let loop = 0; loop < 3; loop++) {
+        buildings.forEach((h, i) => {
+            ctx.fillRect(bOffset + loop * 600 + i * 60, 260 - h, 52, h);
+        });
+    }
+
+    // 2. 基地のコンソール室
+    const MODULE_W = 1050;
+    let midOffset = -(scrollX * 0.5) % MODULE_W;
+    if (midOffset > 0) midOffset -= MODULE_W;
+    for (let m = 0; m < 2; m++) {
+        drawBaseModule(midOffset + m * MODULE_W, theme);
+    }
+
+    // 3. 手前の手すり
+    ctx.fillStyle = '#384050';
+    ctx.fillRect(0, 314, canvas.width, 8);
+    ctx.fillStyle = '#626e82';
+    ctx.fillRect(0, 315, canvas.width, 3);
+    ctx.fillStyle = '#2d3442';
+    ctx.fillRect(0, 348, canvas.width, 6);
+
+    let railOffset = -(scrollX) % 130;
+    if (railOffset > 0) railOffset -= 130;
+    for (let rx = railOffset; rx < canvas.width + 130; rx += 130) {
+        ctx.fillStyle = '#384050';
+        ctx.fillRect(rx, 314, 9, 68);
+        ctx.fillStyle = '#586478';
+        ctx.fillRect(rx + 2, 314, 3, 68);
+        ctx.fillStyle = '#707e94';
+        ctx.fillRect(rx - 2, 312, 13, 12);
+        ctx.fillRect(rx - 2, 345, 13, 10);
+    }
+
+    // 4. メタリックな床
+    let floorGrad = ctx.createLinearGradient(0, 378, 0, canvas.height);
+    floorGrad.addColorStop(0, '#5a6372');
+    floorGrad.addColorStop(0.15, '#7c8696');
+    floorGrad.addColorStop(0.6, '#626b7a');
+    floorGrad.addColorStop(1, '#3b414c');
+    ctx.fillStyle = floorGrad;
+    ctx.fillRect(0, 378, canvas.width, canvas.height - 378);
+
+    ctx.fillStyle = '#252932';
+    ctx.fillRect(0, 378, canvas.width, 4);
+    ctx.fillStyle = '#9aa4b4';
+    ctx.fillRect(0, 382, canvas.width, 2);
+
+    let tileOffset = -(scrollX) % 160;
+    if (tileOffset > 0) tileOffset -= 160;
+    ctx.strokeStyle = '#434a56';
+    ctx.lineWidth = 2;
+    for (let tx = tileOffset; tx < canvas.width + 160; tx += 160) {
+        ctx.beginPath();
+        ctx.moveTo(tx, 382);
+        ctx.lineTo(tx - 55, canvas.height);
+        ctx.stroke();
+    }
+
+    // 警戒ストライプ
+    let hazardOffset = -(scrollX) % 800;
+    if (hazardOffset > 0) hazardOffset -= 800;
+    for (let hx = hazardOffset + 620; hx < canvas.width + 200; hx += 800) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(hx, 425, 150, 30);
+        ctx.clip();
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(hx, 425, 150, 30);
+        ctx.fillStyle = '#d49b27';
+        for (let s = -30; s < 180; s += 28) {
+            ctx.beginPath();
+            ctx.moveTo(hx + s, 455);
+            ctx.lineTo(hx + s + 14, 455);
+            ctx.lineTo(hx + s + 28, 425);
+            ctx.lineTo(hx + s + 14, 425);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+}
+
+function drawBaseModule(bx, theme) {
+    ctx.fillStyle = theme.wall;
+    ctx.fillRect(bx, 58, 560, 320);
+
+    ctx.fillStyle = theme.winWall;
+    ctx.fillRect(bx + 560, 58, 490, 80);
+    ctx.fillRect(bx + 560, 235, 490, 143);
+
+    ctx.fillStyle = theme.pillar;
+    for (let w = 0; w < 4; w++) {
+        let px = bx + 560 + w * 125;
+        ctx.beginPath();
+        ctx.moveTo(px, 138);
+        ctx.lineTo(px + 28, 138);
+        ctx.lineTo(px + 12, 235);
+        ctx.lineTo(px - 16, 235);
+        ctx.fill();
+    }
+    ctx.fillStyle = '#181416';
+    ctx.fillRect(bx + 570, 265, 460, 35);
+    ctx.fillStyle = theme.light;
+    for (let i = 0; i < 6; i++) {
+        ctx.fillRect(bx + 590 + i * 72, 276, 48, 8);
+    }
+
+    ctx.fillStyle = '#4e3832';
+    ctx.fillRect(bx + 545, 58, 22, 320);
+    ctx.fillStyle = '#755244';
+    ctx.fillRect(bx + 550, 58, 6, 320);
+
+    // 大型レーダーモニター
+    drawMonitorFrame(bx + 40, 128, 175, 115, theme.monBg);
+    let rcx = bx + 127, rcy = 185;
+    ctx.strokeStyle = theme.screen;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(rcx, rcy, 36, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(rcx, rcy, 18, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(rcx - 42, rcy); ctx.lineTo(rcx + 42, rcy);
+    ctx.moveTo(rcx, rcy - 42); ctx.lineTo(rcx, rcy + 42);
+    ctx.stroke();
+    let angle = (gameTick * 0.04) % (Math.PI * 2);
+    ctx.beginPath();
+    ctx.moveTo(rcx, rcy);
+    ctx.lineTo(rcx + Math.cos(angle) * 36, rcy + Math.sin(angle) * 36);
+    ctx.stroke();
+
+    // サブモニター群
+    drawMonitorFrame(bx + 230, 165, 92, 72, theme.monBg);
+    ctx.strokeStyle = theme.screen;
+    ctx.strokeRect(bx + 245, 180, 60, 40);
+    drawMonitorFrame(bx + 325, 98, 78, 62, theme.monBg);
+    ctx.fillStyle = theme.screen;
+    for(let l=0; l<4; l++) ctx.fillRect(bx + 338, 112 + l*10, 45 - (l%2)*15, 4);
+    drawMonitorFrame(bx + 340, 175, 84, 70, theme.monBg);
+    ctx.strokeRect(bx + 356, 190, 50, 38);
+
+    // 波形モニター
+    ctx.fillStyle = '#2d3442';
+    ctx.fillRect(bx + 432, 92, 102, 260);
+    ctx.fillStyle = '#0d1016';
+    ctx.fillRect(bx + 442, 105, 82, 68);
+    ctx.strokeStyle = '#f5b041';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let wx = 0; wx < 72; wx += 4) {
+        let wy = 140 + Math.sin((wx + gameTick * 2) * 0.25) * 16 * Math.cos(wx * 0.1);
+        if (wx === 0) ctx.moveTo(bx + 447 + wx, wy);
+        else ctx.lineTo(bx + 447 + wx, wy);
+    }
+    ctx.stroke();
+
+    // デスク＆キーボード
+    ctx.fillStyle = '#28303e';
+    ctx.fillRect(bx + 30, 248, 410, 45);
+    ctx.fillStyle = '#191e28';
+    ctx.fillRect(bx + 30, 293, 410, 75);
+    for (let k = 0; k < 3; k++) {
+        let kx = bx + 65 + k * 120;
+        ctx.fillStyle = theme.screen;
+        ctx.fillRect(kx, 256, 68, 18);
+        ctx.fillStyle = '#e74c3c';
+        ctx.fillRect(kx + 76, 258, 10, 8);
+        ctx.fillStyle = '#f39c12';
+        ctx.fillRect(kx + 76, 268, 10, 6);
+    }
+
+    // オフィスチェア
+    let cx = bx + 68, cy = 248;
+    ctx.fillStyle = '#1a1d24';
+    ctx.fillRect(cx + 16, cy + 52, 8, 38);
+    ctx.fillRect(cx, cy + 88, 40, 6);
+    ctx.fillStyle = '#8f2c2c';
+    ctx.beginPath(); ctx.roundRect(cx, cy - 15, 38, 46, 8); ctx.fill();
+    ctx.fillStyle = '#b83b3b';
+    ctx.beginPath(); ctx.roundRect(cx + 4, cy - 12, 28, 38, 6); ctx.fill();
+    ctx.fillStyle = '#9e3333';
+    ctx.beginPath(); ctx.roundRect(cx - 4, cy + 36, 48, 16, 5); ctx.fill();
+}
+
+function drawMonitorFrame(x, y, w, h, bgColor) {
+    ctx.fillStyle = '#323b4c';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#101820';
+    ctx.fillRect(x + 7, y + 7, w - 14, h - 14);
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(x + 10, y + 10, w - 20, h - 20);
+}
+
+// 主人公のチワワ描画（ヘルメット＆マント装着ビジュアル対応！）
+function drawChihuahua(customX, customY, customDir) {
+    if (gameState === 'PLAYING' && player.invincible > 0 && Math.floor(gameTick / 3) % 2 === 0) return;
+
+    const px = customX !== undefined ? customX : player.x;
+    const py = customY !== undefined ? customY : player.y;
+    const pdir = customDir !== undefined ? customDir : player.dir;
+
+    ctx.save();
+    ctx.translate(px, py);
+
+    // 影
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+    ctx.beginPath();
+    let shadowScale = Math.max(0.35, 1 - (FLOOR_Y - py) / 220);
+    ctx.ellipse(0, FLOOR_Y - py + 4, 42 * shadowScale, 9 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.scale(pdir, 1);
+
+    let runCycle = player.grounded ? (player.isMoving ? player.animTimer : 0) : 1.2;
+    let bounce = player.isMoving && player.grounded ? Math.abs(Math.sin(runCycle)) * -6 : 0;
+    ctx.translate(0, bounce);
+
+    let legSwing1 = Math.sin(runCycle) * 16;
+    let legSwing2 = Math.cos(runCycle) * 16;
+
+    // 奥の足
+    ctx.strokeStyle = '#c48348';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-22, -22); ctx.lineTo(-28 - legSwing1, -4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(20, -22); ctx.lineTo(26 + legSwing1, -4); ctx.stroke();
+
+    // 尻尾
+    ctx.fillStyle = '#f5eee6';
+    ctx.beginPath();
+    ctx.moveTo(-26, -30);
+    ctx.quadraticCurveTo(-58, -68, -66, -42);
+    ctx.quadraticCurveTo(-56, -34, -62, -26);
+    ctx.quadraticCurveTo(-45, -20, -26, -22);
+    ctx.fill();
+    ctx.fillStyle = '#d99658';
+    ctx.beginPath();
+    ctx.moveTo(-24, -28);
+    ctx.quadraticCurveTo(-44, -46, -50, -34);
+    ctx.quadraticCurveTo(-38, -24, -24, -22);
+    ctx.fill();
+
+    // 胴体
+    ctx.fillStyle = '#df9855';
+    ctx.beginPath(); ctx.ellipse(-2, -28, 31, 17, -0.06, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#f5eee6';
+    ctx.beginPath(); ctx.ellipse(-2, -17, 22, 8, -0.05, 0, Math.PI); ctx.fill();
+    ctx.fillStyle = '#c87e3b';
+    ctx.beginPath(); ctx.ellipse(-5, -37, 22, 7, -0.05, 0, Math.PI * 2); ctx.fill();
+
+    // ★マント装着時：背中に風になびく真っ赤なヒーローマントを描画！
+    if (player.hasCape && gameState !== 'ENDING') {
+        let wave = Math.sin(gameTick * 0.35) * 9 + (player.grounded ? 0 : 12);
+        ctx.fillStyle = '#e82c2c';
+        ctx.beginPath();
+        ctx.moveTo(14, -42); // 首元の留め具位置
+        ctx.quadraticCurveTo(-18, -56 + wave * 0.5, -56, -36 + wave);
+        ctx.lineTo(-46, -18 + wave);
+        ctx.quadraticCurveTo(-14, -28, 12, -32);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#ffeb55'; // 金色の縁取り
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // 首元の黄金ブローチ
+        ctx.fillStyle = '#ffeb55';
+        ctx.beginPath(); ctx.arc(15, -37, 4.5, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // 胸元の白い飾り毛
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.moveTo(14, -42);
+    ctx.quadraticCurveTo(36, -36, 33, -20);
+    ctx.lineTo(38, -16);
+    ctx.quadraticCurveTo(26, -10, 12, -16);
+    ctx.quadraticCurveTo(4, -28, 14, -42);
+    ctx.fill();
+
+    // 手前の足
+    ctx.strokeStyle = '#df9855';
+    ctx.beginPath(); ctx.moveTo(-18, -20); ctx.lineTo(-24 + legSwing2, -8); ctx.stroke();
+    ctx.strokeStyle = '#ffffff';
+    ctx.beginPath(); ctx.moveTo(-22 + legSwing2 * 0.7, -11); ctx.lineTo(-25 + legSwing2, -2); ctx.stroke();
+
+    ctx.strokeStyle = '#df9855';
+    ctx.beginPath(); ctx.moveTo(22, -20); ctx.lineTo(30 - legSwing2, -9); ctx.stroke();
+    ctx.strokeStyle = '#ffffff';
+    ctx.beginPath(); ctx.moveTo(27 - legSwing2 * 0.7, -12); ctx.lineTo(32 - legSwing2, -3); ctx.stroke();
+
+    // 頭と奥の耳
+    ctx.fillStyle = '#b87236';
+    ctx.beginPath(); ctx.moveTo(22, -55); ctx.lineTo(29, -82); ctx.lineTo(12, -62); ctx.fill();
+
+    ctx.fillStyle = '#df9855';
+    ctx.beginPath(); ctx.arc(22, -48, 17, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(27, -42, 12, -0.3, Math.PI * 1.1); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(39, -43, 8, 5.5, 0.1, 0, Math.PI * 2); ctx.fill();
+
+    let mouthOpen = player.barkTimer > 0 ? 6 : 3;
+    ctx.fillStyle = '#6e1e26';
+    ctx.beginPath(); ctx.ellipse(37, -37, 6, mouthOpen, 0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff7b89';
+    ctx.beginPath(); ctx.ellipse(39, -36 + mouthOpen * 0.3, 4.5, mouthOpen * 0.7, 0.3, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = '#181414';
+    ctx.beginPath(); ctx.arc(45, -45, 3.2, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = '#141010';
+    ctx.beginPath(); ctx.arc(31, -49, 4.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(32.5, -51, 1.8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillRect(29, -47, 1.2, 1.2);
+
+    ctx.fillStyle = '#f5eee6';
+    ctx.beginPath(); ctx.ellipse(31, -56, 3.5, 1.8, -0.2, 0, Math.PI * 2); ctx.fill();
+
+    // ★ヘルメット装着時：頭にかわいいピンク＆白の肉球ヘルメットを描画！
+    if (player.helmetHp > 0 && gameState !== 'ENDING') {
+        // ヘルメット本体ドーム
+        ctx.fillStyle = '#ff85a2';
+        ctx.beginPath();
+        ctx.arc(21, -52, 19.5, Math.PI * 1.05, Math.PI * 1.98);
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        // バイザー（つば）と白いライン
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.roundRect(4, -56, 36, 5, 3);
+        ctx.fill();
+
+        // あご紐
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(15, -52);
+        ctx.lineTo(24, -35);
+        ctx.stroke();
+
+        // ヘルメット側面の小さな白い羽根マーク
+        ctx.fillStyle = '#ffeb55';
+        ctx.beginPath();
+        ctx.arc(22, -64, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 残り防御回数（1〜3個）を示す頭上のミニバリア星
+        for (let h = 0; h < player.helmetHp; h++) {
+            let hx = 10 + h * 11;
+            let hy = -88 + Math.sin(gameTick * 0.15 + h) * 3;
+            ctx.fillStyle = '#00f2fe';
+            ctx.beginPath(); ctx.arc(hx, hy, 4, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath(); ctx.arc(hx, hy, 2, 0, Math.PI * 2); ctx.fill();
+        }
+    }
+
+    // 手前の耳（ヘルメットの上からぴょんと飛び出す！）
+    ctx.fillStyle = '#df9855';
+    ctx.beginPath(); ctx.moveTo(6, -52); ctx.lineTo(10, -83); ctx.lineTo(25, -58); ctx.fill();
+    ctx.fillStyle = '#eab1b1';
+    ctx.beginPath(); ctx.moveTo(10, -54); ctx.lineTo(12, -76); ctx.lineTo(22, -58); ctx.fill();
+
+    ctx.restore();
+}
+
+// 敵：メカニカルな怖い犬の描画
+function drawMechaDog(e) {
+    ctx.save();
+    ctx.translate(e.x, e.y);
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.beginPath();
+    ctx.ellipse(0, FLOOR_Y - e.y + 4, 38, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    let run = gameTick * 0.45 + e.animOffset;
+    let leg1 = Math.sin(run) * 18;
+    let leg2 = -Math.sin(run) * 18;
+    let bounce = Math.abs(Math.cos(run)) * -4;
+    ctx.translate(0, bounce);
+
+    if (e.type === 'jumper') {
+        ctx.fillStyle = '#4a5568';
+        ctx.fillRect(-10, -45, 24, 10);
+        ctx.fillStyle = (gameTick % 4 < 2) ? '#ff9900' : '#ff2200';
+        ctx.beginPath();
+        ctx.moveTo(14, -42); ctx.lineTo(34, -48); ctx.lineTo(28, -36); ctx.fill();
+    }
+
+    ctx.strokeStyle = '#1e242d';
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'square';
+    ctx.beginPath(); ctx.moveTo(-16, -18); ctx.lineTo(-22 + leg2, -2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(18, -18); ctx.lineTo(24 + leg1, -2); ctx.stroke();
+
+    ctx.strokeStyle = '#434d5e';
+    ctx.beginPath(); ctx.moveTo(-18, -18); ctx.lineTo(-22 + leg1, -1); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(16, -18); ctx.lineTo(22 + leg2, -1); ctx.stroke();
+    ctx.fillStyle = '#ff2a2a';
+    ctx.fillRect(-20, -20, 4, 4);
+    ctx.fillRect(14, -20, 4, 4);
+
+    ctx.fillStyle = '#28303d';
+    ctx.beginPath();
+    ctx.moveTo(-32, -28); ctx.lineTo(22, -26); ctx.lineTo(30, -14); ctx.lineTo(-24, -12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#5c6b82';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = '#8c9bae';
+    for (let s = -22; s <= 10; s += 11) {
+        ctx.beginPath();
+        ctx.moveTo(s, -27); ctx.lineTo(s + 5, -39); ctx.lineTo(s + 10, -27);
+        ctx.fill();
+    }
+
+    ctx.strokeStyle = '#8c9bae';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(26, -24);
+    ctx.lineTo(44, -38 + Math.sin(run) * 6);
+    ctx.stroke();
+
+    ctx.fillStyle = '#222834';
+    ctx.beginPath();
+    ctx.moveTo(-20, -24); ctx.lineTo(-32, -42); ctx.lineTo(-54, -30); ctx.lineTo(-48, -20);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#5c6b82';
+    ctx.stroke();
+
+    ctx.fillStyle = '#3d4758';
+    ctx.beginPath();
+    ctx.moveTo(-26, -38); ctx.lineTo(-18, -56); ctx.lineTo(-32, -41);
+    ctx.fill();
+
+    let jawOpen = Math.abs(Math.sin(run * 0.8)) * 5;
+    ctx.fillStyle = '#181c24';
+    ctx.beginPath();
+    ctx.moveTo(-26, -20); ctx.lineTo(-48, -16 + jawOpen); ctx.lineTo(-44, -11 + jawOpen); ctx.lineTo(-22, -16);
+    ctx.fill();
+
+    ctx.fillStyle = '#e2e8f0';
+    for (let f = 0; f < 3; f++) {
+        let fx = -48 + f * 6;
+        ctx.beginPath();
+        ctx.moveTo(fx, -21); ctx.lineTo(fx + 3, -15); ctx.lineTo(fx + 6, -21);
+        ctx.fill();
+    }
+
+    ctx.fillStyle = '#ff0033';
+    ctx.beginPath();
+    ctx.moveTo(-32, -35); ctx.lineTo(-42, -31); ctx.lineTo(-33, -29);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(-37, -33, 2, 2);
+
+    ctx.restore();
+}
+
+// 各種アイテム（回復肉・かわいいヘルメット・ヒーローマント）の描画
+function drawItems() {
+    items.forEach(item => {
+        ctx.save();
+        let floatY = item.y + Math.sin(gameTick * 0.1) * 6;
+        ctx.translate(item.x, floatY);
+
+        if (item.type === 'heal') {
+            // 1. 回復アイテム（骨付き肉）
+            ctx.fillStyle = 'rgba(104, 240, 216, 0.22)';
+            ctx.beginPath(); ctx.arc(0, 0, 24 + Math.sin(gameTick * 0.2) * 3, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = '#68f0d8'; ctx.lineWidth = 2; ctx.stroke();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath(); ctx.arc(-14, -4, 4.5, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(-14, 4, 4.5, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(14, -4, 4.5, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(14, 4, 4.5, 0, Math.PI * 2); ctx.fill();
+            ctx.fillRect(-14, -3, 28, 6);
+
+            ctx.fillStyle = '#d35400';
+            ctx.beginPath(); ctx.ellipse(0, 0, 10, 8, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#e67e22';
+            ctx.beginPath(); ctx.ellipse(-2, -2, 6, 4, 0, 0, Math.PI * 2); ctx.fill();
+
+            ctx.fillStyle = '#ff4d6d';
+            ctx.font = 'bold 13px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('♥+1', 0, -16);
+
+        } else if (item.type === 'helmet') {
+            // 2. かわいいヘルメットアイテム（3面以降に出現・3回防御）
+            ctx.fillStyle = 'rgba(255, 133, 162, 0.28)';
+            ctx.beginPath(); ctx.arc(0, 0, 26 + Math.sin(gameTick * 0.2) * 3, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = '#ff85a2'; ctx.lineWidth = 2; ctx.stroke();
+
+            // ドーム型のピンクヘルメット
+            ctx.fillStyle = '#ff85a2';
+            ctx.beginPath();
+            ctx.arc(0, 5, 16, Math.PI, 0);
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 白いつば
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath(); ctx.roundRect(-18, 3, 36, 5, 3); ctx.fill();
+
+            // かわいい肉球マーク
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath(); ctx.arc(0, -3, 3.5, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(-5, -8, 1.8, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(0, -10, 1.8, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(5, -8, 1.8, 0, Math.PI * 2); ctx.fill();
+
+            ctx.fillStyle = '#ffeb55';
+            ctx.font = 'bold 12px "MS Gothic", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('メット(防×3)', 0, -19);
+
+        } else if (item.type === 'cape') {
+            // 3. ヒーローマントアイテム（各面ランダム1回・大ジャンプ）
+            ctx.fillStyle = 'rgba(255, 235, 85, 0.25)';
+            ctx.beginPath(); ctx.arc(0, 0, 26 + Math.sin(gameTick * 0.2) * 3, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = '#ffeb55'; ctx.lineWidth = 2; ctx.stroke();
+
+            // ひらめく赤いマントアイコン
+            ctx.fillStyle = '#e82c2c';
+            ctx.beginPath();
+            ctx.moveTo(-8, -10);
+            ctx.lineTo(8, -10);
+            ctx.lineTo(15, 10);
+            ctx.quadraticCurveTo(0, 15, -15, 10);
+            ctx.closePath();
+            ctx.fill();
+            ctx.strokeStyle = '#ffeb55';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 黄金の留め具
+            ctx.fillStyle = '#ffeb55';
+            ctx.beginPath(); ctx.arc(-6, -9, 3, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); ctx.arc(6, -9, 3, 0, Math.PI * 2); ctx.fill();
+
+            ctx.fillStyle = '#4ef0d0';
+            ctx.font = 'bold 12px "MS Gothic", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('マント(JUMP↑)', 0, -19);
+        }
+
+        ctx.restore();
+    });
+}
+
+// ステージボスの描画
+function drawBoss() {
+    if (!boss) return;
+    const theme = STAGE_THEMES[currentStage - 1];
+    ctx.save();
+    ctx.translate(boss.x, boss.y);
+
+    const isFlashing = boss.flashTimer > 0;
+
+    ctx.fillStyle = (gameTick % 4 < 2) ? '#f39c12' : '#e74c3c';
+    ctx.beginPath();
+    ctx.ellipse(72, 25, 25 + Math.random() * 12, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = isFlashing ? '#ffffff' : theme.bossColor;
+    ctx.beginPath();
+    ctx.roundRect(-55, -65, 125, 140, 18);
+    ctx.fill();
+    ctx.strokeStyle = isFlashing ? '#ffffff' : theme.screen;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(-48, -58, 110, 126);
+
+    ctx.fillStyle = isFlashing ? '#ffffff' : '#3d485c';
+    ctx.beginPath();
+    ctx.moveTo(-40, -65); ctx.lineTo(-20, -105); ctx.lineTo(5, -65);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(10, -65); ctx.lineTo(35, -100); ctx.lineTo(50, -65);
+    ctx.fill();
+
+    ctx.fillStyle = isFlashing ? '#ffffff' : '#1e2430';
+    ctx.beginPath();
+    ctx.moveTo(-55, -35); ctx.lineTo(-105, -15); ctx.lineTo(-95, 20); ctx.lineTo(-55, 30);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = theme.light;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.fillStyle = '#e2e8f0';
+    for (let f = 0; f < 3; f++) {
+        let fx = -95 + f * 14;
+        ctx.beginPath();
+        ctx.moveTo(fx, 18); ctx.lineTo(fx + 7, 36); ctx.lineTo(fx + 14, 20);
+        ctx.fill();
+    }
+
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.arc(-32, -20, 24, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = isFlashing ? '#ffcccc' : '#ff1e1e';
+    ctx.beginPath(); ctx.arc(-34, -20, 18, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(-40, -26, 6, 0, Math.PI * 2); ctx.fill();
+
+    ctx.restore();
+}
+
+// ==================================================
+// 5. メイン更新処理＆当たり判定
+// ==================================================
+function update() {
+    gameTick++;
+    if (gameState === 'START' || gameState === 'GAMEOVER') return;
+
+    if (gameState === 'ENDING') {
+        stateTimer++;
+        player.isMoving = true;
+        player.animTimer += 0.25;
+        return;
+    }
+
+    if (gameState === 'STAGE_CLEAR') {
+        stateTimer--;
+        if (stateTimer <= 0) {
+            initStage(currentStage + 1);
+        }
+        return;
+    }
+
+    if (gameState === 'WARNING') {
+        stateTimer--;
+        if (stateTimer % 30 === 0) sound.playSfx('warning');
+        if (stateTimer <= 0) {
+            gameState = 'PLAYING';
+            spawnBoss();
+        }
+    }
+
+    player.isMoving = false;
+
+    // プレイヤー移動
+    if (keys['ArrowRight']) {
+        player.dir = 1;
+        player.isMoving = true;
+        if (boss || gameState === 'WARNING') {
+            player.x = Math.min(canvas.width - 60, player.x + player.speed);
+        } else if (player.x < 400) {
+            player.x += player.speed;
+        } else {
+            scrollX += player.speed;
+            score2 += 3;
+
+            // 1. 回復アイテム（各ステージ2個：距離450と1050）
+            if (!itemSpawnedFlags.heal1 && scrollX >= 450) {
+                itemSpawnedFlags.heal1 = true;
+                items.push({ x: canvas.width + 40, y: FLOOR_Y - 75, type: 'heal' });
+            }
+            if (!itemSpawnedFlags.heal2 && scrollX >= 1050) {
+                itemSpawnedFlags.heal2 = true;
+                items.push({ x: canvas.width + 40, y: FLOOR_Y - 35, type: 'heal' });
+            }
+
+            // 2. ヒーローマント（各ステージ1回・ランダムな距離で出現！）
+            if (!itemSpawnedFlags.cape && scrollX >= itemSpawnedFlags.capeScrollPos) {
+                itemSpawnedFlags.cape = true;
+                items.push({ x: canvas.width + 40, y: FLOOR_Y - 95, type: 'cape' });
+            }
+
+            // 3. かわいいヘルメット（3面以降のみ・距離750付近で出現！）
+            if (currentStage >= 3 && !itemSpawnedFlags.helmet && scrollX >= 750) {
+                itemSpawnedFlags.helmet = true;
+                items.push({ x: canvas.width + 40, y: FLOOR_Y - 65, type: 'helmet' });
+            }
+
+            // ボス出現判定
+            if (scrollX >= BOSS_SPAWN_SCROLL && !boss && gameState === 'PLAYING') {
+                gameState = 'WARNING';
+                stateTimer = 140;
+                sound.mode = 'boss';
+                enemies = [];
+            }
+        }
+    }
+    if (keys['ArrowLeft']) {
+        player.dir = -1;
+        player.isMoving = true;
+        if (player.x > 65) {
+            player.x -= player.speed;
+        } else if (!boss && gameState === 'PLAYING' && scrollX > 0) {
+            scrollX = Math.max(0, scrollX - player.speed);
+        }
+    }
+
+    if (player.isMoving) player.animTimer += 0.34;
+    else player.animTimer = 0;
+
+    if (player.barkTimer > 0) player.barkTimer--;
+    if (player.invincible > 0) player.invincible--;
+
+    // ジャンプと重力
+    player.y += player.vy;
+    if (player.y < FLOOR_Y) {
+        player.vy += player.gravity;
+        player.grounded = false;
+    } else {
+        player.y = FLOOR_Y;
+        player.vy = 0;
+        player.grounded = true;
+    }
+
+    // 「わん！」の更新
+    for (let i = barks.length - 1; i >= 0; i--) {
+        let b = barks[i];
+        b.x += b.vx;
+        if (b.scale < 1.15) b.scale += 0.08;
+        b.life--;
+        if (b.life <= 0 || b.x < -100 || b.x > canvas.width + 100) {
+            barks.splice(i, 1);
+        }
+    }
+
+    // アイテムの更新＆取得判定
+    for (let i = items.length - 1; i >= 0; i--) {
+        let it = items[i];
+        if (keys['ArrowRight'] && player.x >= 400 && !boss) {
+            it.x -= player.speed;
+        }
+        if (Math.abs(player.x - it.x) < 46 && Math.abs((player.y - 25) - it.y) < 46) {
+            if (it.type === 'heal') {
+                lives = Math.min(9, lives + 1);
+                score1 += 10000;
+                sound.playSfx('heal');
+            } else if (it.type === 'helmet') {
+                player.helmetHp = 3; // 3回まで攻撃を防ぐ！
+                score1 += 15000;
+                sound.playSfx('powerup');
+            } else if (it.type === 'cape') {
+                player.hasCape = true; // ハイジャンプ可能に！
+                score1 += 15000;
+                sound.playSfx('powerup');
+            }
+
+            for (let p = 0; p < 16; p++) {
+                particles.push({
+                    x: it.x, y: it.y,
+                    vx: (Math.random() - 0.5) * 8,
+                    vy: (Math.random() - 0.5) * 8,
+                    color: p % 2 === 0 ? '#ffeb55' : '#ff85a2',
+                    life: 28
+                });
+            }
+            items.splice(i, 1);
+            continue;
+        }
+        if (it.x < -100) items.splice(i, 1);
+    }
+
+    // メカ犬（雑魚敵）の生成
+    let spawnInterval = Math.max(55, 100 - (currentStage - 1) * 9);
+    if (!boss && gameState === 'PLAYING' && gameTick % spawnInterval === 0) {
+        let isJumper = Math.random() > 0.52;
+        enemies.push({
+            x: canvas.width + 60,
+            y: FLOOR_Y,
+            vy: 0,
+            vx: -(3.4 + currentStage * 0.4 + Math.random() * 1.8),
+            type: isJumper ? 'jumper' : 'runner',
+            animOffset: Math.random() * 10
+        });
+    }
+
+    // メカ犬の更新＆判定
+    for (let i = enemies.length - 1; i >= 0; i--) {
+        let e = enemies[i];
+        e.x += e.vx - (keys['ArrowRight'] && player.x >= 400 && !boss ? player.speed * 0.75 : 0);
+
+        if (e.type === 'jumper') {
+            if (e.y >= FLOOR_Y && Math.abs(e.x - player.x) < 240 && e.x > player.x) {
+                e.vy = -10.5;
+            }
+            e.y += e.vy;
+            if (e.y < FLOOR_Y) e.vy += 0.55;
+            else { e.y = FLOOR_Y; e.vy = 0; }
+        }
+
+        let hit = false;
+        for (let j = barks.length - 1; j >= 0; j--) {
+            let b = barks[j];
+            if (Math.abs(b.x - e.x) < 52 && Math.abs(b.y - (e.y - 24)) < 42) {
+                hit = true;
+                barks.splice(j, 1);
+                score1 += 3000;
+                score2 += 500;
+                sound.playSfx('hit');
+                for (let p = 0; p < 12; p++) {
+                    particles.push({
+                        x: e.x, y: e.y - 20,
+                        vx: (Math.random() - 0.5) * 9,
+                        vy: (Math.random() - 0.5) * 9,
+                        color: p % 2 === 0 ? '#ff3838' : '#f39c12',
+                        life: 24
+                    });
+                }
+                break;
+            }
+        }
+        if (hit) {
+            enemies.splice(i, 1);
+            continue;
+        }
+
+        if (Math.abs(player.x - e.x) < 38 && Math.abs((player.y - 22) - (e.y - 22)) < 28) {
+            damagePlayer();
+        }
+        if (e.x < -120) enemies.splice(i, 1);
+    }
+
+    // ボスの更新＆攻撃ロジック
+    if (boss) {
+        const theme = STAGE_THEMES[currentStage - 1];
+        if (boss.flashTimer > 0) boss.flashTimer--;
+
+        if (boss.state === 'entering') {
+            boss.x -= 2.8;
+            if (boss.x <= boss.targetX) {
+                boss.x = boss.targetX;
+                boss.state = 'battle';
+            }
+        } else if (boss.state === 'battle') {
+            boss.y += boss.vy;
+            if (boss.y < 155 || boss.y > 315) boss.vy *= -1;
+
+            boss.attackTimer++;
+            if (boss.attackTimer % theme.fireRate === 0) {
+                let angle = Math.atan2((player.y - 25) - boss.y, player.x - (boss.x - 80));
+                enemyBullets.push({
+                    x: boss.x - 90,
+                    y: boss.y,
+                    vx: Math.cos(angle) * (6.2 + currentStage * 0.4),
+                    vy: Math.sin(angle) * (6.2 + currentStage * 0.4)
+                });
+                if (currentStage >= 3) {
+                    enemyBullets.push({
+                        x: boss.x - 90,
+                        y: boss.y + 35,
+                        vx: -(7.0 + currentStage * 0.4),
+                        vy: 0
+                    });
+                }
+                sound.playTone(200, 0.12, 'square', 0.1, 1500);
+            }
+        }
+
+        // 「わん！」とボスの当たり判定
+        for (let j = barks.length - 1; j >= 0; j--) {
+            let b = barks[j];
+            if (Math.abs(b.x - boss.x) < 80 && Math.abs(b.y - boss.y) < 85) {
+                barks.splice(j, 1);
+                boss.hp--;
+                boss.flashTimer = 5;
+                score1 += 5000;
+                sound.playSfx('hit');
+                for (let p = 0; p < 8; p++) {
+                    particles.push({
+                        x: b.x, y: b.y,
+                        vx: (Math.random() - 0.5) * 10,
+                        vy: (Math.random() - 0.5) * 10,
+                        color: '#ffeb55',
+                        life: 18
+                    });
+                }
+
+                // ボス撃破！
+                if (boss.hp <= 0) {
+                    score1 += 200000 * currentStage;
+                    score2 += 5000 * currentStage;
+                    sound.playSfx('bossExplosion');
+                    for (let p = 0; p < 65; p++) {
+                        particles.push({
+                            x: boss.x + (Math.random() - 0.5) * 100,
+                            y: boss.y + (Math.random() - 0.5) * 100,
+                            vx: (Math.random() - 0.5) * 15,
+                            vy: (Math.random() - 0.5) * 15,
+                            color: ['#68f0d8', '#ff3838', '#ffeb55'][p % 3],
+                            life: 60
+                        });
+                    }
+                    boss = null;
+                    enemyBullets = [];
+
+                    if (currentStage < MAX_STAGE) {
+                        gameState = 'STAGE_CLEAR';
+                        stateTimer = 170;
+                    } else {
+                        gameState = 'ENDING';
+                        stateTimer = 0;
+                        sound.mode = 'ending';
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (boss && Math.abs(player.x - boss.x) < 75 && Math.abs((player.y - 25) - boss.y) < 75) {
+            damagePlayer();
+        }
+    }
+
+    // ボスの弾の更新
+    for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        let eb = enemyBullets[i];
+        eb.x += eb.vx;
+        eb.y += eb.vy;
+        if (Math.abs(player.x - eb.x) < 26 && Math.abs((player.y - 25) - eb.y) < 26) {
+            damagePlayer();
+            enemyBullets.splice(i, 1);
+            continue;
+        }
+        if (eb.x < -50 || eb.x > canvas.width + 50 || eb.y < 0 || eb.y > canvas.height) {
+            enemyBullets.splice(i, 1);
+        }
+    }
+
+    // パーティクル更新
+    for (let i = particles.length - 1; i >= 0; i--) {
+        let p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+}
+
+function drawEntities() {
+    drawItems();
+    enemies.forEach(e => drawMechaDog(e));
+    drawBoss();
+
+    enemyBullets.forEach(eb => {
+        ctx.save();
+        ctx.translate(eb.x, eb.y);
+        ctx.fillStyle = '#ff2e63';
+        ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+    });
+
+    barks.forEach(b => {
+        ctx.save();
+        ctx.translate(b.x, b.y);
+        ctx.scale(b.scale, b.scale);
+
+        ctx.strokeStyle = 'rgba(104, 240, 216, 0.7)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.ellipse(b.dir * 10, -6, 14, 26, 0, -Math.PI * 0.4, Math.PI * 0.4);
+        ctx.stroke();
+
+        ctx.font = '900 28px "MS Gothic", "Hiragino Kaku Gothic ProN", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 6;
+        ctx.strokeStyle = '#2b1408';
+        ctx.strokeText('わん！', 0, 0);
+        ctx.fillStyle = '#ffeb55';
+        ctx.fillText('わん！', 0, 0);
+        ctx.restore();
+    });
+
+    particles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - 4, p.y - 4, 8, 8);
+    });
+}
+
+// ==================================================
+// 6. エンディング画面＆各種オーバーレイ演出
+// ==================================================
+function drawEndingScene() {
+    let skyGrad = ctx.createLinearGradient(0, 58, 0, 360);
+    skyGrad.addColorStop(0, '#1e3c72');
+    skyGrad.addColorStop(0.5, '#2a5298');
+    skyGrad.addColorStop(1, '#f6d365');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 58, canvas.width, 320);
+
+    ctx.fillStyle = 'rgba(255, 235, 130, 0.85)';
+    ctx.beginPath();
+    ctx.arc(canvas.width / 2, 340, 95, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#2ecc71';
+    ctx.fillRect(0, 360, canvas.width, 120);
+    ctx.fillStyle = '#27ae60';
+    ctx.fillRect(0, 360, canvas.width, 10);
+
+    for (let f = 0; f < 8; f++) {
+        let fx = ((f * 130 - stateTimer * 2.5) % 900 + 900) % 900 - 20;
+        ctx.fillStyle = f % 2 === 0 ? '#fff' : '#ffeb55';
+        ctx.beginPath(); ctx.arc(fx, 415 + (f % 3) * 15, 5, 0, Math.PI * 2); ctx.fill();
+    }
+
+    player.grounded = true;
+    drawChihuahua(canvas.width / 2 - 40, FLOOR_Y, 1);
+
+    ctx.fillStyle = '#ff4d6d';
+    ctx.font = 'bold 26px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('♥', canvas.width / 2 - 15, FLOOR_Y - 85 + Math.sin(gameTick * 0.15) * 6);
+    ctx.fillStyle = '#ffeb55';
+    ctx.font = 'bold 20px "MS Gothic", sans-serif';
+    ctx.fillText('わん♪', canvas.width / 2 + 35, FLOOR_Y - 70 + Math.cos(gameTick * 0.15) * 5);
+
+    ctx.fillStyle = 'rgba(10, 15, 25, 0.72)';
+    ctx.beginPath();
+    ctx.roundRect(110, 78, canvas.width - 220, 225, 16);
+    ctx.fill();
+    ctx.strokeStyle = '#4ef0d0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(110, 78, canvas.width - 220, 225);
+
+    ctx.fillStyle = '#ffeb55';
+    ctx.font = 'bold 34px "Courier New", monospace';
+    ctx.fillText('CONGRATULATIONS!!', canvas.width / 2, 122);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 19px "MS Gothic", sans-serif';
+    ctx.fillText('恐ろしいメカ犬軍団の野望は打ち砕かれ、', canvas.width / 2, 165);
+    ctx.fillText('サイバー基地と街に平和な朝が戻りました！', canvas.width / 2, 196);
+
+    ctx.fillStyle = '#4ef0d0';
+    ctx.font = 'bold 20px "Courier New", "MS Gothic", monospace';
+    ctx.fillText(`FINAL SCORE (しんにゅう): ${score1}`, canvas.width / 2, 238);
+
+    ctx.fillStyle = '#ff9ff3';
+    ctx.font = 'bold 17px "MS Gothic", sans-serif';
+    ctx.fillText('THANK YOU FOR PLAYING!  -  [R]キー または クリックで最初から遊ぶ', canvas.width / 2, 278);
+    ctx.textAlign = 'left';
+}
+
+function drawOverlays() {
+    ctx.textAlign = 'center';
+    const theme = STAGE_THEMES[currentStage - 1];
+
+    if (gameState === 'START') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(0, 58, canvas.width, canvas.height - 58);
+        ctx.fillStyle = '#4ef0d0';
+        ctx.font = 'bold 34px "Courier New", "MS Gothic", monospace';
+        ctx.fillText('CYBER CHIHUAHUA: 5 STAGES', canvas.width / 2, 185);
+        ctx.fillStyle = '#ffeb55';
+        ctx.font = 'bold 17px "MS Gothic", sans-serif';
+        ctx.fillText('マントで高くジャンプ！3面からはかわいいヘルメットで3回防御！', canvas.width / 2, 230);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 20px "MS Gothic", sans-serif';
+        if (Math.floor(gameTick / 25) % 2 === 0) {
+            ctx.fillText('【 何かキーを押すかクリックでスタート（BGMが鳴ります） 】', canvas.width / 2, 295);
+        }
+    } else if (gameState === 'WARNING') {
+        if (Math.floor(stateTimer / 10) % 2 === 0) {
+            ctx.fillStyle = 'rgba(255, 20, 20, 0.25)';
+            ctx.fillRect(0, 58, canvas.width, canvas.height - 58);
+            ctx.fillStyle = '#ff3838';
+            ctx.font = 'bold 46px "Courier New", monospace';
+            ctx.fillText('WARNING !!', canvas.width / 2, 225);
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 22px "MS Gothic", sans-serif';
+            ctx.fillText(`STAGE ${currentStage} BOSS: 巨大メカ犬「${theme.bossName}」接近中！`, canvas.width / 2, 272);
+        }
+    } else if (gameState === 'STAGE_CLEAR') {
+        ctx.fillStyle = 'rgba(0, 20, 30, 0.65)';
+        ctx.fillRect(0, 58, canvas.width, canvas.height - 58);
+        ctx.fillStyle = '#ffeb55';
+        ctx.font = 'bold 46px "Courier New", monospace';
+        ctx.fillText(`STAGE ${currentStage} CLEAR!!`, canvas.width / 2, 220);
+        ctx.fillStyle = '#4ef0d0';
+        ctx.font = 'bold 20px "MS Gothic", sans-serif';
+        ctx.fillText(`次のエリア（STAGE ${currentStage + 1}）へしんにゅうします...`, canvas.width / 2, 265);
+        ctx.fillStyle = '#ff9ff3';
+        ctx.font = 'bold 16px "MS Gothic", sans-serif';
+        ctx.fillText('（※ヘルメットとマントはここで解除されます）', canvas.width / 2, 300);
+    } else if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = 'rgba(15, 0, 0, 0.8)';
+        ctx.fillRect(0, 58, canvas.width, canvas.height - 58);
+        ctx.fillStyle = '#ff3838';
+        ctx.font = 'bold 54px "Courier New", monospace';
+        ctx.fillText('GAME OVER', canvas.width / 2, 235);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 20px "MS Gothic", sans-serif';
+        ctx.fillText('[R] キー または 画面クリック で STAGE 1 からリトライ', canvas.width / 2, 295);
+    }
+    ctx.textAlign = 'left';
+}
+
+function loop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    update();
+    if (gameState === 'ENDING') {
+        drawEndingScene();
+        drawHUD();
+    } else {
+        drawBackground();
+        drawChihuahua();
+        drawEntities();
+        drawHUD();
+        drawOverlays();
+    }
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
